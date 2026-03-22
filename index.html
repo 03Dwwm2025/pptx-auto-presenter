@@ -289,6 +289,11 @@
     .speed-wrap { display: flex; align-items: center; gap: 7px; font-size: 0.8rem; color: var(--muted); }
     #speed-slider { width: 80px; accent-color: var(--accent); cursor: pointer; }
     #speed-val    { min-width: 34px; }
+    /* Compact voice select used in controls bar */
+    select.voice-compact {
+      width: auto; max-width: 210px; min-width: 120px;
+      font-size: 0.78rem; padding: 5px 8px;
+    }
     .kbd-hint { font-size: 0.72rem; color: var(--muted); border-top: 1px solid var(--border); margin-top: 8px; padding-top: 8px; width: 100%; }
     .kbd-hint kbd { background: var(--surface2); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; font-size: 0.68rem; }
   </style>
@@ -347,6 +352,13 @@
           <input type="number" id="target-duration" min="0" max="180" step="1" value="0"
                  placeholder="Ex : 25" style="width:130px" />
         </div>
+      </div>
+
+      <div class="form-group">
+        <label for="voice-select">Voix de synthese (selection automatique de la meilleure voix)</label>
+        <select id="voice-select">
+          <option value="">En attente des voix du navigateur...</option>
+        </select>
       </div>
 
       <button class="btn btn-primary" id="load-btn" disabled>
@@ -443,6 +455,12 @@
       </div>
       <div class="ctrl-group right">
         <div class="speed-wrap">
+          <span>Voix</span>
+          <select id="pres-voice-select" class="voice-compact">
+            <option value="">—</option>
+          </select>
+        </div>
+        <div class="speed-wrap">
           <span>Vitesse</span>
           <input type="range" id="speed-slider" min="0.5" max="1.6" step="0.05" value="0.95" />
           <span id="speed-val">0.95x</span>
@@ -493,10 +511,108 @@ const state = {
   currentIndex:   0,
   isPlaying:      false,
   speechRate:     0.95,
-  currentFileKey: '',   // localStorage cache key for the current file
+  selectedVoice:  null, // SpeechSynthesisVoice chosen by auto-select or user
+  currentFileKey: '',
 };
 
 const synth = window.speechSynthesis;
+
+// ═══════════════════════════════════════════════════════
+//  Voice management
+// ═══════════════════════════════════════════════════════
+let cachedVoices = [];
+
+// Score a voice for a given locale. Higher = better.
+function scoreVoice(voice, lang) {
+  const n = voice.name.toLowerCase();
+  let score = 0;
+  if (voice.lang === lang)     score += 15; // exact locale bonus
+  if (n.includes('enhanced'))  score += 100;
+  if (n.includes('neural'))    score += 90;
+  if (n.includes('natural'))   score += 80;
+  if (n.includes('google'))    score += 40;
+  if (n.includes('microsoft')) score += 20;
+  if (n.includes('paul'))      score += 5;  // Microsoft Paul (FR) bonus
+  return score;
+}
+
+function getVoicesForLang(lang) {
+  const code = lang.split('-')[0].toLowerCase();
+  return cachedVoices
+    .filter(v => v.lang.toLowerCase().startsWith(code))
+    .sort((a, b) => scoreVoice(b, lang) - scoreVoice(a, lang));
+}
+
+// Human-readable label with quality badge
+function voiceLabel(voice) {
+  const n   = voice.name.toLowerCase();
+  const tag = n.includes('enhanced') ? ' ✦ enhanced' :
+              n.includes('neural')   ? ' ✦ neural'   :
+              n.includes('natural')  ? ' ✦ natural'  : '';
+  return voice.name + tag;
+}
+
+// Populate both voice <select> elements for a given language
+function populateVoiceDropdowns(lang) {
+  const voices = getVoicesForLang(lang);
+  const ids    = ['voice-select', 'pres-voice-select'];
+
+  for (const id of ids) {
+    const sel = document.getElementById(id);
+    if (!sel) continue;
+    const prev = sel.value;
+    sel.innerHTML = '';
+
+    if (voices.length === 0) {
+      sel.innerHTML = '<option value="">Aucune voix disponible</option>';
+      continue;
+    }
+    for (const v of voices) {
+      const opt       = document.createElement('option');
+      opt.value       = v.name;
+      opt.textContent = voiceLabel(v);
+      sel.appendChild(opt);
+    }
+    // Restore user's previous selection, or pick best automatically (index 0)
+    sel.value = voices.find(v => v.name === prev) ? prev : (voices[0]?.name || '');
+  }
+
+  syncVoiceSelectors();
+  commitVoiceSelection();
+}
+
+// Keep both selectors in sync
+function syncVoiceSelectors(sourceId) {
+  const ids  = ['voice-select', 'pres-voice-select'];
+  const src  = document.getElementById(sourceId || ids[0]);
+  if (!src) return;
+  const val  = src.value;
+  for (const id of ids) {
+    const el = document.getElementById(id);
+    if (el && el !== src) el.value = val;
+  }
+}
+
+function commitVoiceSelection() {
+  const sel  = document.getElementById('voice-select') ||
+               document.getElementById('pres-voice-select');
+  const name = sel?.value || '';
+  state.selectedVoice = cachedVoices.find(v => v.name === name) || null;
+}
+
+function onVoicesReady() {
+  cachedVoices = synth.getVoices();
+  if (cachedVoices.length === 0) return;
+  const lang = document.getElementById('speech-lang')?.value || 'fr-FR';
+  populateVoiceDropdowns(lang);
+}
+
+// Chrome fires voiceschanged; Firefox populates synchronously
+if (synth.getVoices().length > 0) {
+  onVoicesReady();
+} else {
+  synth.addEventListener('voiceschanged', onVoicesReady);
+}
 
 // ═══════════════════════════════════════════════════════
 //  Panel helpers
@@ -1210,6 +1326,7 @@ function startSpeaking() {
   utt.rate   = state.speechRate;
   utt.pitch  = 1.0;
   utt.volume = 1.0;
+  if (state.selectedVoice) utt.voice = state.selectedVoice;
 
   utt.onstart = () => {
     document.getElementById('script-box').classList.add('speaking');
@@ -1343,6 +1460,25 @@ document.getElementById('raw-toggle').addEventListener('click', () => {
   btn.innerHTML = box.classList.contains('open')
     ? '&#9660; Masquer le texte brut extrait'
     : '&#9654; Voir le texte brut extrait';
+});
+
+// Voice – setup dropdown
+document.getElementById('voice-select').addEventListener('change', function() {
+  syncVoiceSelectors('voice-select');
+  commitVoiceSelection();
+});
+
+// Voice – presentation dropdown (also restarts speech if playing)
+document.getElementById('pres-voice-select').addEventListener('change', function() {
+  syncVoiceSelectors('pres-voice-select');
+  commitVoiceSelection();
+  if (state.isPlaying) { stopSpeaking(); startSpeaking(); }
+});
+
+// Language change → repopulate voice list automatically
+document.getElementById('speech-lang').addEventListener('change', function() {
+  state.speechLang = this.value;
+  populateVoiceDropdowns(this.value);
 });
 
 // Speed
