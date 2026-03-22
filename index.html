@@ -1,0 +1,1049 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PPTX Auto-Presenter</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <style>
+    :root {
+      --bg:          #0f1117;
+      --surface:     #1a1d2e;
+      --surface2:    #252840;
+      --accent:      #6366f1;
+      --accent-h:    #4f52e0;
+      --text:        #e2e8f0;
+      --muted:       #94a3b8;
+      --success:     #22c55e;
+      --error:       #ef4444;
+      --border:      #2d3148;
+      --radius:      12px;
+    }
+
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Header ── */
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 14px 32px;
+    }
+    header h1 { font-size: 1.1rem; font-weight: 600; }
+    header p  { font-size: 0.8rem; color: var(--muted); margin-top: 2px; }
+
+    /* ── Main ── */
+    main {
+      flex: 1;
+      padding: 32px;
+      max-width: 860px;
+      margin: 0 auto;
+      width: 100%;
+    }
+
+    .panel { display: none; }
+    .panel.active { display: block; }
+
+    /* ── Cards ── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 28px;
+    }
+    .card h2 { font-size: 1.3rem; margin-bottom: 6px; }
+    .card .desc { color: var(--muted); font-size: 0.9rem; line-height: 1.6; margin-bottom: 24px; }
+
+    /* ── Form ── */
+    .form-group { margin-bottom: 18px; }
+    label { display: block; font-size: 0.8rem; font-weight: 500; color: var(--muted); margin-bottom: 6px; }
+
+    input[type="password"],
+    input[type="text"],
+    select {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 9px 13px;
+      color: var(--text);
+      font-size: 0.9rem;
+      transition: border-color 0.2s;
+    }
+    input:focus, select:focus { outline: none; border-color: var(--accent); }
+    select option { background: var(--bg); }
+
+    /* ── File upload ── */
+    .file-zone {
+      width: 100%;
+      background: var(--bg);
+      border: 2px dashed var(--border);
+      border-radius: 8px;
+      padding: 28px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+    }
+    .file-zone:hover { border-color: var(--accent); background: rgba(99,102,241,.05); }
+    .file-zone input { display: none; }
+    .file-zone .icon { font-size: 2rem; margin-bottom: 6px; }
+    .file-zone .hint { color: var(--muted); font-size: 0.85rem; }
+    .file-zone .chosen { margin-top: 6px; color: var(--accent); font-weight: 500; font-size: 0.9rem; }
+
+    /* ── Buttons ── */
+    .btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 9px 18px; border-radius: 8px; border: none;
+      cursor: pointer; font-size: 0.875rem; font-weight: 500;
+      transition: background 0.2s, opacity 0.2s;
+    }
+    .btn:disabled { opacity: .45; cursor: not-allowed; }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-primary:hover:not(:disabled) { background: var(--accent-h); }
+    .btn-secondary { background: var(--surface2); color: var(--text); }
+    .btn-secondary:hover:not(:disabled) { background: var(--border); }
+    .btn-danger { background: rgba(239,68,68,.12); color: var(--error); border: 1px solid rgba(239,68,68,.3); }
+    .btn-danger:hover:not(:disabled) { background: rgba(239,68,68,.22); }
+    .btn-icon { width: 42px; height: 42px; padding: 0; justify-content: center; border-radius: 8px; font-size: 1rem; }
+    .btn-play { width: 52px; height: 52px; border-radius: 50%; font-size: 1.2rem; }
+
+    /* ── Error banner ── */
+    .error-banner {
+      background: rgba(239,68,68,.1); border: 1px solid rgba(239,68,68,.3);
+      border-radius: 8px; padding: 10px 14px; color: var(--error);
+      font-size: 0.85rem; margin-bottom: 16px; display: none;
+    }
+    .error-banner.show { display: block; }
+
+    /* ── Loading panel ── */
+    #loading-panel .card { text-align: center; padding: 52px 32px; }
+    .spinner {
+      width: 46px; height: 46px;
+      border: 3px solid var(--border); border-top-color: var(--accent);
+      border-radius: 50%; animation: spin .7s linear infinite;
+      margin: 0 auto 22px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #load-title { font-size: 1.15rem; margin-bottom: 6px; }
+    #load-status { color: var(--muted); font-size: 0.875rem; margin-bottom: 22px; }
+    .progress-wrap { background: var(--bg); border-radius: 99px; height: 7px; max-width: 380px; margin: 0 auto; overflow: hidden; }
+    .progress-fill { height: 100%; background: var(--accent); border-radius: 99px; transition: width .3s ease; }
+    #load-count { margin-top: 8px; font-size: 0.8rem; color: var(--muted); }
+
+    /* ── Presentation panel ── */
+    .pres-header {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 18px;
+    }
+    .slide-badge {
+      background: var(--accent); color: #fff;
+      font-size: 0.78rem; font-weight: 600;
+      padding: 4px 12px; border-radius: 99px;
+    }
+    .slide-total { color: var(--muted); font-size: 0.95rem; margin-left: 10px; }
+
+    /* Dots */
+    .dots { display: flex; gap: 5px; align-items: center; flex-wrap: wrap; max-width: 320px; }
+    .dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--border); cursor: pointer;
+      transition: background .2s, transform .2s;
+    }
+    .dot.done    { background: var(--success); }
+    .dot.current { background: var(--accent); transform: scale(1.35); }
+
+    /* ── Timer bar ── */
+    .timer-bar {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 13px 20px; margin-bottom: 16px;
+      display: flex; align-items: center; gap: 14px;
+    }
+    .timer-col { display: flex; flex-direction: column; gap: 3px; white-space: nowrap; }
+    .timer-col-label { font-size: 0.65rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+    .timer-col-val {
+      font-size: 1.05rem; font-weight: 700;
+      font-variant-numeric: tabular-nums; letter-spacing: .02em;
+    }
+    .timer-track-wrap { flex: 1; display: flex; flex-direction: column; gap: 5px; }
+    .timer-track {
+      background: var(--bg); border-radius: 99px; height: 6px; overflow: hidden;
+    }
+    .timer-track-fill {
+      height: 100%; border-radius: 99px;
+      background: var(--accent); transition: width .5s linear, background .3s;
+    }
+    .timer-track-labels {
+      display: flex; justify-content: space-between;
+      font-size: 0.65rem; color: var(--muted);
+    }
+    .timer-divider { width: 1px; height: 34px; background: var(--border); flex-shrink: 0; }
+    .slide-budget-wrap { display: flex; flex-direction: column; gap: 3px; align-items: flex-end; }
+    .slide-budget-label { font-size: 0.65rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+    .slide-budget-val { font-size: 0.95rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+    /* Linear progress (> 20 slides) */
+    .pres-progress-bar {
+      background: var(--border); border-radius: 99px; height: 5px;
+      overflow: hidden; max-width: 260px;
+    }
+    .pres-progress-fill { height: 100%; background: var(--accent); border-radius: 99px; transition: width .3s; }
+
+    /* Raw text box */
+    .raw-box {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 16px 20px; margin-bottom: 16px;
+    }
+    .raw-box .label {
+      font-size: 0.7rem; text-transform: uppercase; letter-spacing: .08em;
+      color: var(--muted); margin-bottom: 8px;
+    }
+    .raw-text {
+      font-size: 0.875rem; color: var(--muted); line-height: 1.55; font-style: italic;
+      max-height: 72px; overflow: hidden; position: relative;
+    }
+    .raw-text::after {
+      content: ''; position: absolute; bottom: 0; left: 0; right: 0; height: 22px;
+      background: linear-gradient(transparent, var(--surface));
+    }
+
+    /* Script box */
+    .script-box {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 22px; margin-bottom: 20px;
+      min-height: 160px; transition: border-color .25s, box-shadow .25s;
+    }
+    .script-box.speaking {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px var(--accent), 0 0 24px rgba(99,102,241,.18);
+    }
+    .script-box .label {
+      font-size: 0.7rem; text-transform: uppercase; letter-spacing: .08em;
+      color: var(--muted); margin-bottom: 14px;
+    }
+    #script-text { font-size: 1rem; line-height: 1.8; color: var(--text); }
+
+    /* Speaking indicator */
+    .speaking-row {
+      display: none; align-items: center; gap: 8px;
+      margin-top: 14px; color: var(--accent); font-size: 0.82rem; font-weight: 500;
+    }
+    .speaking-row.show { display: flex; }
+    .bars { display: flex; align-items: flex-end; gap: 2px; height: 14px; }
+    .bar { width: 3px; background: var(--accent); border-radius: 2px; animation: bar-pulse .5s ease infinite alternate; }
+    .bar:nth-child(1) { height: 5px;  animation-delay: 0s;    }
+    .bar:nth-child(2) { height: 10px; animation-delay: .1s;   }
+    .bar:nth-child(3) { height: 13px; animation-delay: .2s;   }
+    .bar:nth-child(4) { height: 10px; animation-delay: .15s;  }
+    .bar:nth-child(5) { height: 5px;  animation-delay: .05s;  }
+    @keyframes bar-pulse { from { transform: scaleY(.35); } to { transform: scaleY(1); } }
+
+    /* Controls bar */
+    .controls {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 16px 20px;
+      display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    }
+    .ctrl-group { display: flex; gap: 6px; align-items: center; }
+    .ctrl-group.center { flex: 1; justify-content: center; }
+    .ctrl-group.right  { margin-left: auto; gap: 10px; }
+
+    .speed-wrap { display: flex; align-items: center; gap: 7px; font-size: 0.8rem; color: var(--muted); }
+    #speed-slider { width: 80px; accent-color: var(--accent); cursor: pointer; }
+    #speed-val    { min-width: 32px; }
+
+    .kbd-hint { font-size: 0.72rem; color: var(--muted); border-top: 1px solid var(--border); margin-top: 10px; padding-top: 10px; width: 100%; }
+    .kbd-hint kbd { background: var(--surface2); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; font-size: 0.68rem; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>PPTX Auto-Presenter</h1>
+  <p>Presentation orale automatique powered by Claude AI + Web Speech API</p>
+</header>
+
+<main>
+
+  <!-- ── SETUP ── -->
+  <div id="setup-panel" class="panel active">
+    <div class="card">
+      <h2>Configuration</h2>
+      <p class="desc">
+        Chargez un fichier .pptx et renseignez votre cle API Anthropic.
+        L'app extraira le texte de chaque slide, generera un script oral via Claude,
+        puis lira chaque script automatiquement avec la voix du navigateur.
+      </p>
+
+      <div class="error-banner" id="setup-err"></div>
+
+      <div class="form-group">
+        <label for="api-key">Cle API Anthropic</label>
+        <input type="password" id="api-key" placeholder="sk-ant-..." autocomplete="off" />
+      </div>
+
+      <div class="form-group">
+        <label>Fichier PPTX</label>
+        <div class="file-zone" id="drop-zone">
+          <input type="file" id="file-input" accept=".pptx" />
+          <div class="icon">&#128196;</div>
+          <div class="hint">Cliquez ou deposez votre fichier .pptx ici</div>
+          <div class="chosen" id="file-chosen"></div>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label for="speech-lang">Langue de la synthese vocale</label>
+        <select id="speech-lang">
+          <option value="fr-FR" selected>Francais (fr-FR)</option>
+          <option value="en-US">English (en-US)</option>
+          <option value="en-GB">English UK (en-GB)</option>
+          <option value="es-ES">Espanol (es-ES)</option>
+          <option value="de-DE">Deutsch (de-DE)</option>
+          <option value="it-IT">Italiano (it-IT)</option>
+          <option value="pt-PT">Portugues (pt-PT)</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label for="target-duration">Duree cible de la presentation (minutes &mdash; 0 = sans contrainte)</label>
+        <input type="number" id="target-duration" min="0" max="180" step="1" value="0" placeholder="Ex : 25" style="width:180px" />
+      </div>
+
+      <button class="btn btn-primary" id="load-btn" disabled>
+        Charger et generer les scripts
+      </button>
+    </div>
+  </div>
+
+  <!-- ── LOADING ── -->
+  <div id="loading-panel" class="panel">
+    <div class="card">
+      <div class="spinner"></div>
+      <div id="load-title">Chargement...</div>
+      <div id="load-status">Initialisation</div>
+      <div class="progress-wrap">
+        <div class="progress-fill" id="load-fill" style="width:0%"></div>
+      </div>
+      <div id="load-count"></div>
+    </div>
+  </div>
+
+  <!-- ── PRESENTATION ── -->
+  <div id="presentation-panel" class="panel">
+
+    <div class="pres-header">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span class="slide-badge" id="slide-badge">Slide 1</span>
+        <span class="slide-total" id="slide-total">sur 0</span>
+      </div>
+      <div id="nav-indicator"></div>
+    </div>
+
+    <!-- Timer bar -->
+    <div class="timer-bar" id="timer-bar">
+      <div class="timer-col">
+        <div class="timer-col-label">Temps ecoule</div>
+        <div class="timer-col-val" id="total-timer">0:00</div>
+      </div>
+      <div class="timer-track-wrap" id="timer-track-wrap">
+        <div class="timer-track">
+          <div class="timer-track-fill" id="time-fill" style="width:0%"></div>
+        </div>
+        <div class="timer-track-labels">
+          <span>0:00</span>
+          <span id="timer-target-label"></span>
+        </div>
+      </div>
+      <div class="timer-divider"></div>
+      <div class="slide-budget-wrap">
+        <div class="slide-budget-label">Slide en cours</div>
+        <div class="slide-budget-val" id="slide-timer">0:00</div>
+      </div>
+    </div>
+
+    <div class="raw-box">
+      <div class="label">Contenu extrait de la slide</div>
+      <div class="raw-text" id="raw-text"></div>
+    </div>
+
+    <div class="script-box" id="script-box">
+      <div class="label">Script genere par Claude</div>
+      <div id="script-text">Chargement...</div>
+      <div class="speaking-row" id="speaking-row">
+        <div class="bars">
+          <div class="bar"></div><div class="bar"></div><div class="bar"></div>
+          <div class="bar"></div><div class="bar"></div>
+        </div>
+        Lecture en cours...
+      </div>
+    </div>
+
+    <div class="error-banner" id="pres-err"></div>
+
+    <div class="controls">
+      <!-- Left: nav -->
+      <div class="ctrl-group">
+        <button class="btn btn-secondary btn-icon" id="prev-btn" title="Slide precedente (←)">&#9664;</button>
+        <button class="btn btn-secondary btn-icon" id="next-btn" title="Slide suivante (→)">&#9654;</button>
+      </div>
+      <!-- Center: play/stop -->
+      <div class="ctrl-group center">
+        <button class="btn btn-primary btn-icon btn-play" id="play-btn" title="Lecture / Pause (Espace)">&#9654;</button>
+        <button class="btn btn-secondary btn-icon" id="stop-btn" title="Arreter (Echap)">&#9632;</button>
+      </div>
+      <!-- Right: speed + reset -->
+      <div class="ctrl-group right">
+        <div class="speed-wrap">
+          <span>Vitesse</span>
+          <input type="range" id="speed-slider" min="0.5" max="1.6" step="0.05" value="0.95" />
+          <span id="speed-val">0.95x</span>
+        </div>
+        <button class="btn btn-danger" id="reset-btn">Nouvelle presentation</button>
+      </div>
+      <!-- Keyboard hints -->
+      <div class="kbd-hint">
+        <kbd>Espace</kbd> Lecture/Pause &nbsp;
+        <kbd>&#8592;</kbd> Slide precedente &nbsp;
+        <kbd>&#8594;</kbd> Slide suivante &nbsp;
+        <kbd>Echap</kbd> Stop
+      </div>
+    </div>
+
+  </div>
+</main>
+
+<script>
+// ─────────────────────────────────────────────
+//  State
+// ─────────────────────────────────────────────
+const state = {
+  apiKey:        '',
+  speechLang:    'fr-FR',
+  targetMinutes: 0,      // 0 = no constraint
+  timePerSlide:  [],     // seconds budget per slide (0 = no budget)
+  slides:        [],     // string[]
+  scripts:       [],     // string[]
+  currentIndex:  0,
+  isPlaying:     false,
+  speechRate:    0.95,
+};
+
+const synth = window.speechSynthesis;
+
+// ─────────────────────────────────────────────
+//  Panel helpers
+// ─────────────────────────────────────────────
+function showPanel(id) {
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.getElementById(id + '-panel').classList.add('active');
+}
+
+function showErr(elId, msg) {
+  const el = document.getElementById(elId);
+  el.textContent = msg;
+  el.classList.add('show');
+}
+function hideErr(elId) {
+  document.getElementById(elId).classList.remove('show');
+}
+
+// ─────────────────────────────────────────────
+//  Setup panel – file + key validation
+// ─────────────────────────────────────────────
+const apiKeyInput  = document.getElementById('api-key');
+const fileInput    = document.getElementById('file-input');
+const dropZone     = document.getElementById('drop-zone');
+const fileChosen   = document.getElementById('file-chosen');
+const loadBtn      = document.getElementById('load-btn');
+let   pickedFile   = null;
+
+function refreshLoadBtn() {
+  loadBtn.disabled = !apiKeyInput.value.trim() || !pickedFile;
+}
+
+apiKeyInput.addEventListener('input', refreshLoadBtn);
+
+dropZone.addEventListener('click', () => fileInput.click());
+
+dropZone.addEventListener('dragover', e => {
+  e.preventDefault();
+  dropZone.style.borderColor = 'var(--accent)';
+});
+dropZone.addEventListener('dragleave', () => {
+  dropZone.style.borderColor = '';
+});
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.style.borderColor = '';
+  const f = e.dataTransfer.files[0];
+  if (f && f.name.toLowerCase().endsWith('.pptx')) pickFile(f);
+});
+fileInput.addEventListener('change', () => {
+  if (fileInput.files[0]) pickFile(fileInput.files[0]);
+});
+
+function pickFile(f) {
+  pickedFile = f;
+  fileChosen.textContent = f.name;
+  refreshLoadBtn();
+}
+
+loadBtn.addEventListener('click', startLoading);
+
+// ─────────────────────────────────────────────
+//  PPTX parsing
+// ─────────────────────────────────────────────
+function extractTextFromXML(xmlStr) {
+  const parser = new DOMParser();
+  const doc    = parser.parseFromString(xmlStr, 'text/xml');
+  const ns     = 'http://schemas.openxmlformats.org/drawingml/2006/main';
+
+  // Collect text grouped by paragraphs to preserve structure
+  const paras  = doc.getElementsByTagNameNS(ns, 'p');
+  const lines  = [];
+
+  for (let i = 0; i < paras.length; i++) {
+    const tNodes = paras[i].getElementsByTagNameNS(ns, 't');
+    const words  = [];
+    for (let j = 0; j < tNodes.length; j++) {
+      const t = tNodes[j].textContent; // keep spacing
+      if (t.trim()) words.push(t);
+    }
+    if (words.length) lines.push(words.join(''));
+  }
+
+  // Fallback: no paragraphs found, grab all t elements directly
+  if (lines.length === 0) {
+    const tNodes = doc.getElementsByTagNameNS(ns, 't');
+    for (let i = 0; i < tNodes.length; i++) {
+      const t = tNodes[i].textContent.trim();
+      if (t) lines.push(t);
+    }
+  }
+
+  return lines.join('\n').trim() || '(Slide sans texte visible)';
+}
+
+async function parsePPTX(file) {
+  const zip        = await JSZip.loadAsync(file);
+  const slideFiles = Object.keys(zip.files)
+    .filter(name => /^ppt\/slides\/slide\d+\.xml$/.test(name))
+    .sort((a, b) => {
+      const numA = parseInt(a.match(/slide(\d+)/)[1]);
+      const numB = parseInt(b.match(/slide(\d+)/)[1]);
+      return numA - numB;
+    });
+
+  if (slideFiles.length === 0) throw new Error('Aucune slide trouvee dans ce fichier.');
+
+  const slides = [];
+  for (const path of slideFiles) {
+    const xml  = await zip.files[path].async('string');
+    slides.push(extractTextFromXML(xml));
+  }
+  return slides;
+}
+
+// ─────────────────────────────────────────────
+//  Claude API
+// ─────────────────────────────────────────────
+async function generateScript(slideText, idx, total, apiKey, lang, slideTimeSec) {
+  const langLabel = lang.startsWith('fr') ? 'francais' :
+                    lang.startsWith('es') ? 'espagnol' :
+                    lang.startsWith('de') ? 'allemand' :
+                    lang.startsWith('it') ? 'italien'  :
+                    lang.startsWith('pt') ? 'portugais': 'anglais';
+
+  // ~130 words/minute is average oral speech rate
+  const timeConstraint = slideTimeSec > 0
+    ? `- Duree cible STRICTE : ${Math.round(slideTimeSec)} secondes de lecture a voix haute (soit environ ${Math.round(slideTimeSec / 60 * 130)} mots). Respecte cette duree avec precision.`
+    : '- Visee 30 a 60 secondes de lecture a voix haute';
+
+  const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type':                          'application/json',
+      'x-api-key':                             apiKey,
+      'anthropic-version':                     '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true',
+    },
+    body: JSON.stringify({
+      model:      'claude-sonnet-4-20250514',
+      max_tokens: 1024,
+      messages: [{
+        role:    'user',
+        content: `Tu es un presentateur professionnel et engageant.
+Genere un script oral naturel pour la slide ${idx + 1} sur ${total} d'une presentation.
+
+Contraintes:
+- Langue du script: ${langLabel}
+- Parle directement comme devant un vrai auditoire
+- Ton fluide, conversationnel, sans jargon de teleprompter
+${timeConstraint}
+- Commence directement le discours (pas de "Voici le script", pas de mention du numero de slide)
+- Si la slide contient peu de texte, enrichis avec contexte naturel de transition
+
+Contenu de la slide:
+${slideText}`,
+      }],
+    }),
+  });
+
+  if (!resp.ok) {
+    const body = await resp.json().catch(() => ({}));
+    throw new Error(body.error?.message || `Erreur HTTP ${resp.status}`);
+  }
+
+  const data = await resp.json();
+  return data.content[0].text.trim();
+}
+
+// ─────────────────────────────────────────────
+//  Loading flow
+// ─────────────────────────────────────────────
+function setProgress(title, status, current, total) {
+  document.getElementById('load-title').textContent  = title;
+  document.getElementById('load-status').textContent = status;
+  const pct = total > 0 ? (current / total) * 100 : 0;
+  document.getElementById('load-fill').style.width   = pct + '%';
+  document.getElementById('load-count').textContent  = total > 0 ? `${current} / ${total} slides` : '';
+}
+
+async function startLoading() {
+  hideErr('setup-err');
+  const apiKey = apiKeyInput.value.trim();
+  if (!apiKey)     { showErr('setup-err', 'Veuillez entrer votre cle API Anthropic.'); return; }
+  if (!pickedFile) { showErr('setup-err', 'Veuillez selectionner un fichier PPTX.');   return; }
+
+  state.apiKey        = apiKey;
+  state.speechLang    = document.getElementById('speech-lang').value;
+  state.targetMinutes = parseFloat(document.getElementById('target-duration').value) || 0;
+
+  showPanel('loading');
+  setProgress('Analyse du fichier PPTX...', 'Lecture et extraction du texte', 0, 0);
+
+  // Step 1: parse
+  let slides;
+  try {
+    slides       = await parsePPTX(pickedFile);
+    state.slides = slides;
+  } catch (err) {
+    showPanel('setup');
+    showErr('setup-err', 'Erreur parsing PPTX : ' + err.message);
+    return;
+  }
+
+  // Step 2: generate scripts sequentially
+  const total    = slides.length;
+  state.scripts  = new Array(total).fill('');
+  state.timePerSlide = calcTimePerSlide(slides, state.targetMinutes);
+
+  for (let i = 0; i < total; i++) {
+    setProgress(
+      'Generation des scripts via Claude...',
+      `Slide ${i + 1} / ${total}`,
+      i, total
+    );
+    try {
+      state.scripts[i] = await generateScript(
+        slides[i], i, total, apiKey, state.speechLang, state.timePerSlide[i]
+      );
+    } catch (err) {
+      // Keep raw text as fallback so the presentation can still run
+      state.scripts[i] = slides[i] !== '(Slide sans texte visible)'
+        ? slides[i]
+        : `Script non disponible (${err.message})`;
+    }
+    setProgress('Generation des scripts via Claude...', `${i + 1} / ${total} slides traitees`, i + 1, total);
+  }
+
+  // Step 3: launch presentation
+  state.currentIndex = 0;
+  state.isPlaying    = false;
+  initPresentation();
+}
+
+// ─────────────────────────────────────────────
+//  Time budgeting
+// ─────────────────────────────────────────────
+function calcTimePerSlide(slides, targetMinutes) {
+  if (!targetMinutes || targetMinutes <= 0) return slides.map(() => 0);
+  const totalSec   = targetMinutes * 60;
+  const totalChars = slides.reduce((sum, s) => sum + s.length, 0);
+  if (totalChars === 0) {
+    const equal = totalSec / slides.length;
+    return slides.map(() => Math.round(equal));
+  }
+  // Weight by text length so content-heavy slides get more time
+  return slides.map(s => Math.max(10, Math.round(totalSec * s.length / totalChars)));
+}
+
+// ─────────────────────────────────────────────
+//  Timer
+// ─────────────────────────────────────────────
+let timerTick      = null;   // setInterval handle
+let totalMs        = 0;      // accumulated ms (excludes paused periods)
+let slideMs        = 0;      // accumulated ms for current slide only
+let tickStartedAt  = null;   // Date.now() when last play() was called
+let slideTickStart = null;   // Date.now() when current slide's play started
+
+function startTimer() {
+  if (timerTick) return;
+  const now      = Date.now();
+  tickStartedAt  = now;
+  slideTickStart = now;
+  timerTick      = setInterval(refreshTimerDisplay, 250);
+}
+
+function pauseTimer() {
+  if (!timerTick) return;
+  clearInterval(timerTick);
+  timerTick     = null;
+  const now     = Date.now();
+  totalMs      += now - tickStartedAt;
+  slideMs      += now - slideTickStart;
+  tickStartedAt  = null;
+  slideTickStart = null;
+  refreshTimerDisplay();
+}
+
+function resetSlideTimer() {
+  // Commit elapsed time and restart slide counter for the new slide
+  if (timerTick) {
+    const now      = Date.now();
+    totalMs       += now - tickStartedAt;
+    tickStartedAt  = now;
+    slideMs        = 0;
+    slideTickStart = now;
+  } else {
+    slideMs        = 0;
+    slideTickStart = null;
+  }
+  refreshTimerDisplay();
+}
+
+function resetAllTimers() {
+  clearInterval(timerTick);
+  timerTick      = null;
+  totalMs        = 0;
+  slideMs        = 0;
+  tickStartedAt  = null;
+  slideTickStart = null;
+}
+
+function getLiveTotalSec() {
+  return (totalMs + (tickStartedAt ? Date.now() - tickStartedAt : 0)) / 1000;
+}
+function getLiveSlideSec() {
+  return (slideMs + (slideTickStart ? Date.now() - slideTickStart : 0)) / 1000;
+}
+
+function fmt(sec) {
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+function refreshTimerDisplay() {
+  const totalSec   = getLiveTotalSec();
+  const slideSec   = getLiveSlideSec();
+  const targetSec  = state.targetMinutes * 60;
+  const budget     = state.timePerSlide[state.currentIndex] || 0;
+
+  // ── Total timer ──
+  const totalEl = document.getElementById('total-timer');
+  if (totalEl) {
+    totalEl.textContent = targetSec > 0
+      ? `${fmt(totalSec)} / ${fmt(targetSec)}`
+      : fmt(totalSec);
+    totalEl.style.color = targetSec > 0 && totalSec > targetSec
+      ? 'var(--error)'
+      : targetSec > 0 && totalSec > targetSec * 0.9
+      ? 'var(--warning)'
+      : 'var(--text)';
+  }
+
+  // ── Progress bar ──
+  const trackWrap = document.getElementById('timer-track-wrap');
+  if (trackWrap) {
+    trackWrap.style.display = targetSec > 0 ? '' : 'none';
+    if (targetSec > 0) {
+      const pct  = Math.min(100, totalSec / targetSec * 100);
+      const fill = document.getElementById('time-fill');
+      if (fill) {
+        fill.style.width      = pct + '%';
+        fill.style.background = totalSec > targetSec ? 'var(--error)' : 'var(--accent)';
+      }
+      const lbl = document.getElementById('timer-target-label');
+      if (lbl) lbl.textContent = fmt(targetSec);
+    }
+  }
+
+  // ── Slide timer ──
+  const slideEl = document.getElementById('slide-timer');
+  if (slideEl) {
+    slideEl.textContent = budget > 0
+      ? `${fmt(slideSec)} / ${fmt(budget)}`
+      : fmt(slideSec);
+    slideEl.style.color = budget > 0 && slideSec > budget * 1.1
+      ? 'var(--error)'
+      : budget > 0 && slideSec > budget * 0.85
+      ? 'var(--warning)'
+      : 'var(--muted)';
+  }
+}
+
+// ─────────────────────────────────────────────
+//  Presentation
+// ─────────────────────────────────────────────
+function initPresentation() {
+  resetAllTimers();
+  showPanel('presentation');
+  buildNavIndicator();
+  renderSlide(0);
+  updatePlayBtn();
+  refreshTimerDisplay();
+}
+
+function buildNavIndicator() {
+  const container = document.getElementById('nav-indicator');
+  container.innerHTML = '';
+  const total = state.slides.length;
+
+  if (total <= 24) {
+    // Dot navigation
+    const wrap = document.createElement('div');
+    wrap.className = 'dots';
+    for (let i = 0; i < total; i++) {
+      const dot = document.createElement('div');
+      dot.className = 'dot';
+      dot.dataset.i = i;
+      dot.title = `Slide ${i + 1}`;
+      dot.addEventListener('click', () => {
+        stopSpeaking();
+        state.isPlaying = false;
+        updatePlayBtn();
+        renderSlide(i);
+      });
+      wrap.appendChild(dot);
+    }
+    container.appendChild(wrap);
+  } else {
+    // Linear progress bar for large decks
+    const wrap = document.createElement('div');
+    wrap.className = 'pres-progress-bar';
+    const fill = document.createElement('div');
+    fill.className = 'pres-progress-fill';
+    fill.id = 'pres-fill';
+    wrap.appendChild(fill);
+    container.appendChild(wrap);
+  }
+}
+
+function updateNavIndicator() {
+  const total = state.slides.length;
+  const idx   = state.currentIndex;
+
+  if (total <= 24) {
+    document.querySelectorAll('#nav-indicator .dot').forEach((dot, i) => {
+      dot.className = 'dot' + (i < idx ? ' done' : i === idx ? ' current' : '');
+    });
+  } else {
+    const fill = document.getElementById('pres-fill');
+    if (fill) fill.style.width = ((idx + 1) / total * 100) + '%';
+  }
+}
+
+function renderSlide(index) {
+  state.currentIndex = index;
+  const total        = state.slides.length;
+
+  document.getElementById('slide-badge').textContent = `Slide ${index + 1}`;
+  document.getElementById('slide-total').textContent = `sur ${total}`;
+  document.getElementById('raw-text').textContent    = state.slides[index];
+  document.getElementById('script-text').textContent = state.scripts[index] || '(script vide)';
+
+  document.getElementById('prev-btn').disabled = index === 0;
+  document.getElementById('next-btn').disabled = index === total - 1;
+
+  updateNavIndicator();
+  resetSlideTimer();
+}
+
+// ─────────────────────────────────────────────
+//  Speech synthesis
+// ─────────────────────────────────────────────
+function startSpeaking() {
+  const script = state.scripts[state.currentIndex];
+  if (!script) return;
+
+  stopSpeaking();
+
+  const utt     = new SpeechSynthesisUtterance(script);
+  utt.lang      = state.speechLang;
+  utt.rate      = state.speechRate;
+  utt.pitch     = 1.0;
+  utt.volume    = 1.0;
+
+  utt.onstart = () => {
+    document.getElementById('script-box').classList.add('speaking');
+    document.getElementById('speaking-row').classList.add('show');
+    startTimer();
+  };
+
+  utt.onend = () => {
+    document.getElementById('script-box').classList.remove('speaking');
+    document.getElementById('speaking-row').classList.remove('show');
+
+    if (!state.isPlaying) return;
+
+    const next = state.currentIndex + 1;
+    if (next < state.slides.length) {
+      renderSlide(next);   // resets slide timer; total timer keeps running
+      startSpeaking();
+    } else {
+      // End of presentation
+      pauseTimer();
+      state.isPlaying = false;
+      updatePlayBtn();
+    }
+  };
+
+  utt.onerror = e => {
+    // 'interrupted' / 'canceled' happen on manual stop — not real errors
+    if (e.error === 'interrupted' || e.error === 'canceled') return;
+    document.getElementById('script-box').classList.remove('speaking');
+    document.getElementById('speaking-row').classList.remove('show');
+    pauseTimer();
+    showErr('pres-err', `Erreur synthese vocale : ${e.error}`);
+    state.isPlaying = false;
+    updatePlayBtn();
+  };
+
+  synth.speak(utt);
+}
+
+function stopSpeaking() {
+  if (synth.speaking || synth.pending) synth.cancel();
+  document.getElementById('script-box').classList.remove('speaking');
+  document.getElementById('speaking-row').classList.remove('show');
+}
+
+function updatePlayBtn() {
+  const btn = document.getElementById('play-btn');
+  if (state.isPlaying) {
+    btn.innerHTML = '&#9646;&#9646;';
+    btn.title     = 'Pause (Espace)';
+  } else {
+    btn.innerHTML = '&#9654;';
+    btn.title     = 'Lecture (Espace)';
+  }
+}
+
+// ─────────────────────────────────────────────
+//  Controls
+// ─────────────────────────────────────────────
+document.getElementById('play-btn').addEventListener('click', () => {
+  hideErr('pres-err');
+  if (state.isPlaying) {
+    state.isPlaying = false;
+    stopSpeaking();
+    pauseTimer();
+  } else {
+    state.isPlaying = true;
+    startSpeaking();
+    // timer is started inside utt.onstart for accurate sync
+  }
+  updatePlayBtn();
+});
+
+document.getElementById('stop-btn').addEventListener('click', () => {
+  state.isPlaying = false;
+  stopSpeaking();
+  pauseTimer();
+  updatePlayBtn();
+});
+
+document.getElementById('prev-btn').addEventListener('click', () => {
+  if (state.currentIndex === 0) return;
+  const wasPlaying = state.isPlaying;
+  stopSpeaking();
+  renderSlide(state.currentIndex - 1);
+  if (wasPlaying) startSpeaking();
+});
+
+document.getElementById('next-btn').addEventListener('click', () => {
+  if (state.currentIndex >= state.slides.length - 1) return;
+  const wasPlaying = state.isPlaying;
+  stopSpeaking();
+  renderSlide(state.currentIndex + 1);
+  if (wasPlaying) startSpeaking();
+});
+
+document.getElementById('reset-btn').addEventListener('click', () => {
+  stopSpeaking();
+  resetAllTimers();
+  state.isPlaying    = false;
+  state.slides       = [];
+  state.scripts      = [];
+  state.timePerSlide = [];
+  state.currentIndex = 0;
+  pickedFile         = null;
+  fileInput.value    = '';
+  fileChosen.textContent = '';
+  loadBtn.disabled   = true;
+  showPanel('setup');
+});
+
+// Speed
+const speedSlider = document.getElementById('speed-slider');
+const speedVal    = document.getElementById('speed-val');
+speedSlider.addEventListener('input', () => {
+  state.speechRate = parseFloat(speedSlider.value);
+  speedVal.textContent = parseFloat(speedSlider.value).toFixed(2) + 'x';
+});
+
+// ─────────────────────────────────────────────
+//  Keyboard shortcuts
+// ─────────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  if (!document.getElementById('presentation-panel').classList.contains('active')) return;
+  // Avoid triggering while typing in an input
+  if (['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName)) return;
+
+  switch (e.key) {
+    case ' ':
+      e.preventDefault();
+      document.getElementById('play-btn').click();
+      break;
+    case 'ArrowLeft':
+      e.preventDefault();
+      document.getElementById('prev-btn').click();
+      break;
+    case 'ArrowRight':
+      e.preventDefault();
+      document.getElementById('next-btn').click();
+      break;
+    case 'Escape':
+      document.getElementById('stop-btn').click();
+      break;
+  }
+});
+
+// ─────────────────────────────────────────────
+//  Browser check
+// ─────────────────────────────────────────────
+if (!window.speechSynthesis) {
+  alert('Attention : votre navigateur ne supporte pas la Web Speech API.\nUtilisez Chrome, Edge ou Safari pour la synthese vocale.');
+}
+</script>
+</body>
+</html>
