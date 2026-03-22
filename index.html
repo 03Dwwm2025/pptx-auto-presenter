@@ -690,23 +690,27 @@ function emuToPx(val) { return parseInt(val || 0) * EMU_PX; }
 
 // Resolve a DrawingML color element to a CSS hex string.
 // Falls back to defaultColor if the element is absent or uses an unsupported scheme.
-function resolveColor(el, defaultColor) {
+// themeColors: map built from ppt/theme/themeN.xml (actual RGB values per token)
+// Falls back to a generic static map if a token is not in the theme.
+function resolveColor(el, defaultColor, themeColors = {}) {
   if (!el) return defaultColor;
   // Direct RGB
   const srgb = el.getElementsByTagNameNS(DRAW_NS, 'srgbClr')[0];
   if (srgb) return '#' + srgb.getAttribute('val');
-  // Scheme color – map common tokens to sensible defaults
+  // Scheme color – use actual theme values first
   const scheme = el.getElementsByTagNameNS(DRAW_NS, 'schemeClr')[0];
   if (scheme) {
     const v = scheme.getAttribute('val');
-    const map = {
+    if (themeColors[v]) return themeColors[v];
+    // Generic fallback (light theme assumptions) used only when theme file is absent
+    const fallback = {
       dk1: '#000000', dk2: '#404040', tx1: '#000000', tx2: '#404040',
       lt1: '#FFFFFF', lt2: '#F0F0F0', bg1: '#FFFFFF', bg2: '#F0F0F0',
       accent1: '#4472C4', accent2: '#ED7D31', accent3: '#A9D18E',
       accent4: '#FF0000', accent5: '#5B9BD5', accent6: '#70AD47',
       hlink: '#0563C1',
     };
-    return map[v] || defaultColor;
+    return fallback[v] || defaultColor;
   }
   // Preset color (rare)
   const pst = el.getElementsByTagNameNS(DRAW_NS, 'prstClr')[0];
@@ -717,7 +721,7 @@ function resolveColor(el, defaultColor) {
   return defaultColor;
 }
 
-function parseSlideStructure(xml) {
+function parseSlideStructure(xml, themeColors = {}) {
   const parser = new DOMParser();
   const doc    = parser.parseFromString(xml, 'text/xml');
 
@@ -725,9 +729,8 @@ function parseSlideStructure(xml) {
   let bgColor = null;
   const bgEls = doc.getElementsByTagNameNS(PRES_NS, 'bg');
   if (bgEls.length > 0) {
-    // Try direct solid fill first
     const solidFill = bgEls[0].getElementsByTagNameNS(DRAW_NS, 'solidFill')[0];
-    bgColor = resolveColor(solidFill || bgEls[0], null);
+    bgColor = resolveColor(solidFill || bgEls[0], null, themeColors);
   }
 
   const elements = [];
@@ -780,7 +783,7 @@ function parseSlideStructure(xml) {
         const bold    = rPr ? rPr.getAttribute('b')    === '1' : isTitle;
         const italic  = rPr ? rPr.getAttribute('i')    === '1' : false;
         const solidFill = rPr ? rPr.getElementsByTagNameNS(DRAW_NS, 'solidFill')[0] : null;
-        const color   = resolveColor(solidFill || rPr, '#000000');
+        const color   = resolveColor(solidFill || rPr, '#000000', themeColors);
 
         runData.push({ text: tEl.textContent, sz, bold, italic, color });
       }
@@ -819,7 +822,7 @@ function parseSlideStructure(xml) {
     });
   }
 
-  return { bgColor, elements };
+  return { bgColor, elements, themeColors };
 }
 
 // Loads images from the slide's relationship file and returns { rId → objectURL }
@@ -853,6 +856,40 @@ async function loadSlideImages(zip, slidePath) {
   return map;
 }
 
+// Parse ppt/theme/themeN.xml to get real RGB values for all scheme color tokens.
+// Returns e.g. { dk1: '#0f1117', lt1: '#FFFFFF', bg1: '#0f1117', ... }
+async function loadThemeColors(zip) {
+  const themePaths = Object.keys(zip.files)
+    .filter(p => /^ppt\/theme\/theme\d+\.xml$/.test(p))
+    .sort();
+  if (themePaths.length === 0) return {};
+
+  const xml    = await zip.files[themePaths[0]].async('string');
+  const parser = new DOMParser();
+  const doc    = parser.parseFromString(xml, 'text/xml');
+
+  const tokens = ['dk1','lt1','dk2','lt2','accent1','accent2','accent3','accent4','accent5','accent6','hlink','folHlink'];
+  const colors = {};
+
+  for (const token of tokens) {
+    const el = doc.getElementsByTagNameNS(DRAW_NS, token)[0];
+    if (!el) continue;
+    // Direct sRGB value
+    const srgb = el.getElementsByTagNameNS(DRAW_NS, 'srgbClr')[0];
+    if (srgb) { colors[token] = '#' + srgb.getAttribute('val'); continue; }
+    // System color: lastClr holds the last resolved value
+    const sys  = el.getElementsByTagNameNS(DRAW_NS, 'sysClr')[0];
+    if (sys)  { colors[token] = '#' + (sys.getAttribute('lastClr') || '000000'); }
+  }
+
+  // Semantic aliases so resolveColor finds them by both names
+  colors.bg1 = colors.lt1 || '#FFFFFF';
+  colors.bg2 = colors.lt2 || '#F0F0F0';
+  colors.tx1 = colors.dk1 || '#000000';
+  colors.tx2 = colors.dk2 || '#404040';
+  return colors;
+}
+
 async function parsePPTX(file) {
   const zip        = await JSZip.loadAsync(file);
   const slideFiles = Object.keys(zip.files)
@@ -861,11 +898,14 @@ async function parsePPTX(file) {
 
   if (slideFiles.length === 0) throw new Error('Aucune slide trouvee dans ce fichier.');
 
+  // Load theme once for the whole presentation
+  const themeColors = await loadThemeColors(zip);
+
   const slides = [];
   for (const slidePath of slideFiles) {
     const xml       = await zip.files[slidePath].async('string');
     const text      = extractTextFromXML(xml);
-    const structure = parseSlideStructure(xml);
+    const structure = parseSlideStructure(xml, themeColors);
     const mediaMap  = await loadSlideImages(zip, slidePath);
 
     // Resolve image rIds → blob URLs, collect all URLs for cleanup
@@ -889,8 +929,9 @@ function renderSlidePreview(slide) {
   const canvas = document.getElementById('slide-canvas');
   canvas.innerHTML = '';
 
-  const { bgColor, elements } = slide.structure;
-  canvas.style.background = bgColor || '#FFFFFF';
+  const { bgColor, elements, themeColors } = slide.structure;
+  // Use slide's explicit background, then theme's bg1 (correct even for dark themes), then white
+  canvas.style.background = bgColor || themeColors?.bg1 || '#FFFFFF';
 
   const hasVisuals = elements.length > 0;
 
