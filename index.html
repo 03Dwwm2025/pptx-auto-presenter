@@ -172,43 +172,68 @@
 
     /* ── Slide preview ── */
     .slide-preview-section {
+      position: relative;
       margin-bottom: 14px;
       border-radius: var(--radius);
       overflow: hidden;
       border: 1px solid var(--border);
       background: #111;
     }
-    /* 16:9 ratio wrapper */
+    /* 16:9 container — pure CSS, no JS needed */
     #slide-preview-wrapper {
       position: relative;
       width: 100%;
-      padding-top: 56.25%;
+      aspect-ratio: 16 / 9;
       overflow: hidden;
       background: #111;
     }
-    /* Fixed-size canvas, scaled by JS */
+    /* Canvas fills 100% of the wrapper via CSS, no transform */
     #slide-canvas {
       position: absolute;
-      top: 0; left: 0;
-      width: 960px;
-      height: 540px;
-      transform-origin: top left;
-      background: #FFFFFF;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      container-type: inline-size; /* enables cqw font units */
       overflow: hidden;
     }
-    /* Fallback text shown when structure has no elements */
+    /* Fallback text (slides with no parsed elements) */
     #slide-canvas .fallback-text {
       position: absolute;
       inset: 0;
       display: flex;
       align-items: center;
       justify-content: center;
-      padding: 48px;
-      font-size: 28px;
+      padding: 5%;
+      font-size: 3cqw;
       color: #333;
       text-align: center;
       line-height: 1.5;
       font-family: 'Segoe UI', sans-serif;
+    }
+    /* Fullscreen button (shown on hover) */
+    .slide-fs-btn {
+      position: absolute;
+      top: 8px; right: 8px;
+      background: rgba(0,0,0,.55);
+      border: none; color: #fff;
+      width: 34px; height: 34px;
+      border-radius: 6px;
+      cursor: pointer; font-size: 1rem;
+      display: flex; align-items: center; justify-content: center;
+      opacity: 0; transition: opacity .2s;
+      z-index: 10;
+    }
+    .slide-preview-section:hover .slide-fs-btn { opacity: 1; }
+    /* Fullscreen: centre le 16:9 avec barres noires si nécessaire */
+    #slide-preview-wrapper:fullscreen,
+    #slide-preview-wrapper:-webkit-full-screen {
+      width:  min(100vw, calc(100vh * 16 / 9));
+      height: min(100vh, calc(100vw * 9 / 16));
+      background: #000;
+      margin: auto;
+      position: fixed;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
     }
 
     /* ── Timer bar ── */
@@ -396,6 +421,7 @@
     <div class="slide-preview-section">
       <div id="slide-preview-wrapper">
         <div id="slide-canvas"></div>
+        <button class="slide-fs-btn" id="fs-btn" title="Plein ecran">⛶</button>
       </div>
     </div>
 
@@ -941,7 +967,6 @@ function renderSlidePreview(slide) {
     fallback.className = 'fallback-text';
     fallback.textContent = slide.text !== '(Slide sans texte visible)' ? slide.text : '';
     canvas.appendChild(fallback);
-    scaleSlideCanvas();
     return;
   }
 
@@ -959,8 +984,8 @@ function renderSlidePreview(slide) {
       img.src = el.url;
       img.style.cssText = `
         position:absolute;
-        left:${el.x}px; top:${el.y}px;
-        width:${el.w}px; height:${el.h}px;
+        left:${(el.x/CANVAS_W*100).toFixed(4)}%; top:${(el.y/CANVAS_H*100).toFixed(4)}%;
+        width:${(el.w/CANVAS_W*100).toFixed(4)}%; height:${(el.h/CANVAS_H*100).toFixed(4)}%;
         object-fit:contain;
       `;
       canvas.appendChild(img);
@@ -972,8 +997,8 @@ function renderSlidePreview(slide) {
     const div = document.createElement('div');
     div.style.cssText = `
       position:absolute;
-      left:${el.x}px; top:${el.y}px;
-      width:${el.w}px; height:${el.h}px;
+      left:${(el.x/CANVAS_W*100).toFixed(4)}%; top:${(el.y/CANVAS_H*100).toFixed(4)}%;
+      width:${(el.w/CANVAS_W*100).toFixed(4)}%; height:${(el.h/CANVAS_H*100).toFixed(4)}%;
       overflow:hidden;
       line-height:1.2;
     `;
@@ -990,7 +1015,7 @@ function renderSlidePreview(slide) {
         // sz is in pt; our canvas is 960px = 960pt equivalent at reference DPI,
         // so pt values map directly to px here.
         span.style.cssText = `
-          font-size:${run.sz}px;
+          font-size:${(run.sz/CANVAS_W*100).toFixed(4)}cqw;
           font-weight:${run.bold ? 'bold' : 'normal'};
           font-style:${run.italic ? 'italic' : 'normal'};
           color:${run.color};
@@ -1003,17 +1028,6 @@ function renderSlidePreview(slide) {
     }
     canvas.appendChild(div);
   }
-
-  scaleSlideCanvas();
-}
-
-function scaleSlideCanvas() {
-  const wrapper = document.getElementById('slide-preview-wrapper');
-  const canvas  = document.getElementById('slide-canvas');
-  if (!wrapper || !canvas) return;
-  const w = wrapper.getBoundingClientRect().width;
-  if (!w) { requestAnimationFrame(scaleSlideCanvas); return; } // layout not ready yet
-  canvas.style.transform = `scale(${w / CANVAS_W})`;
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1289,9 +1303,6 @@ function initPresentation() {
   renderSlide(0);
   updatePlayBtn();
   refreshTimerDisplay();
-  window.addEventListener('resize', scaleSlideCanvas);
-  // Trigger scale AFTER the browser has laid out the newly visible panel
-  requestAnimationFrame(scaleSlideCanvas);
 }
 
 function buildNavIndicator() {
@@ -1472,12 +1483,10 @@ document.getElementById('regen-btn').addEventListener('click', async () => {
   showPanel('presentation');
   renderSlide(savedIndex);
   updatePlayBtn(); refreshTimerDisplay();
-  requestAnimationFrame(scaleSlideCanvas);
 });
 
 document.getElementById('reset-btn').addEventListener('click', () => {
   stopSpeaking(); resetAllTimers();
-  window.removeEventListener('resize', scaleSlideCanvas);
   // Release blob URLs
   for (const slide of state.slides) {
     for (const url of (slide.mediaUrls || [])) URL.revokeObjectURL(url);
@@ -1526,6 +1535,24 @@ document.getElementById('speech-lang').addEventListener('change', function() {
 document.getElementById('speed-slider').addEventListener('input', function() {
   state.speechRate = parseFloat(this.value);
   document.getElementById('speed-val').textContent = parseFloat(this.value).toFixed(2) + 'x';
+});
+
+// ═══════════════════════════════════════════════════════
+//  Fullscreen button
+// ═══════════════════════════════════════════════════════
+document.getElementById('fs-btn').addEventListener('click', () => {
+  const wrapper = document.getElementById('slide-preview-wrapper');
+  if (!document.fullscreenElement) {
+    wrapper.requestFullscreen().catch(() => {});
+  } else {
+    document.exitFullscreen();
+  }
+});
+
+document.addEventListener('fullscreenchange', () => {
+  const btn = document.getElementById('fs-btn');
+  btn.textContent = document.fullscreenElement ? '✕' : '⛶';
+  btn.title = document.fullscreenElement ? 'Quitter le plein ecran' : 'Plein ecran';
 });
 
 // ═══════════════════════════════════════════════════════
