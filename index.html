@@ -447,6 +447,7 @@
           <input type="range" id="speed-slider" min="0.5" max="1.6" step="0.05" value="0.95" />
           <span id="speed-val">0.95x</span>
         </div>
+        <button class="btn btn-ghost" id="regen-btn" title="Vider le cache et rappeler Claude pour tous les scripts">Regenerer</button>
         <button class="btn btn-danger" id="reset-btn">Nouvelle presentation</button>
       </div>
       <div class="kbd-hint">
@@ -483,16 +484,16 @@ const EMU_PX = CANVAS_W / SLIDE_W_EMU; // ≈ 1/12700
 //  State
 // ═══════════════════════════════════════════════════════
 const state = {
-  apiKey:        '',
-  speechLang:    'fr-FR',
-  targetMinutes: 0,
-  timePerSlide:  [],
-  // Each slide: { text: string, structure: SlideStructure, mediaUrls: string[] }
-  slides:        [],
-  scripts:       [],
-  currentIndex:  0,
-  isPlaying:     false,
-  speechRate:    0.95,
+  apiKey:         '',
+  speechLang:     'fr-FR',
+  targetMinutes:  0,
+  timePerSlide:   [],
+  slides:         [],   // { text, structure, mediaUrls }[]
+  scripts:        [],
+  currentIndex:   0,
+  isPlaying:      false,
+  speechRate:     0.95,
+  currentFileKey: '',   // localStorage cache key for the current file
 };
 
 const synth = window.speechSynthesis;
@@ -853,8 +854,9 @@ function scaleSlideCanvas() {
   const wrapper = document.getElementById('slide-preview-wrapper');
   const canvas  = document.getElementById('slide-canvas');
   if (!wrapper || !canvas) return;
-  const scale = wrapper.offsetWidth / CANVAS_W;
-  canvas.style.transform = `scale(${scale})`;
+  const w = wrapper.getBoundingClientRect().width;
+  if (!w) { requestAnimationFrame(scaleSlideCanvas); return; } // layout not ready yet
+  canvas.style.transform = `scale(${w / CANVAS_W})`;
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1010,6 +1012,49 @@ ${slideText}`,
 }
 
 // ═══════════════════════════════════════════════════════
+//  Script cache (localStorage)
+// ═══════════════════════════════════════════════════════
+
+// Derive a stable key from the file's name + size + lastModified
+function fileKey(file) {
+  let h = 0;
+  const s = `${file.name}:${file.size}:${file.lastModified}`;
+  for (let i = 0; i < s.length; i++) {
+    h = Math.imul(31, h) + s.charCodeAt(i) | 0;
+  }
+  return 'pptx-cache-' + Math.abs(h).toString(36);
+}
+
+function readCache(key, lang, targetMinutes, slideCount) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    // Invalidate if any generation param changed
+    if (
+      data.scripts?.length !== slideCount ||
+      data.lang          !== lang         ||
+      data.targetMinutes !== targetMinutes
+    ) return null;
+    return data.scripts;
+  } catch (_) { return null; }
+}
+
+function writeCache(key, scripts, lang, targetMinutes) {
+  try {
+    localStorage.setItem(key, JSON.stringify({
+      scripts, lang, targetMinutes,
+      slideCount: scripts.length,
+      createdAt:  Date.now(),
+    }));
+  } catch (_) { /* quota exceeded – silently skip */ }
+}
+
+function clearCache(key) {
+  try { localStorage.removeItem(key); } catch (_) {}
+}
+
+// ═══════════════════════════════════════════════════════
 //  Loading flow
 // ═══════════════════════════════════════════════════════
 function setProgress(title, status, current, total) {
@@ -1042,22 +1087,34 @@ async function startLoading() {
     return;
   }
 
-  const total       = slides.length;
-  state.scripts     = new Array(total).fill('');
+  const total        = slides.length;
+  state.scripts      = new Array(total).fill('');
   state.timePerSlide = calcTimePerSlide(slides, state.targetMinutes);
 
-  for (let i = 0; i < total; i++) {
-    setProgress('Generation des scripts via Claude...', `Slide ${i + 1} / ${total}`, i, total);
-    try {
-      state.scripts[i] = await generateScript(
-        slides[i].text, i, total, apiKey, state.speechLang, state.timePerSlide[i]
-      );
-    } catch (err) {
-      state.scripts[i] = slides[i].text !== '(Slide sans texte visible)'
-        ? slides[i].text
-        : `Script non disponible (${err.message})`;
+  // ── Cache check ──────────────────────────────────────
+  const fKey    = fileKey(pickedFile);
+  state.currentFileKey = fKey;
+  const cached  = readCache(fKey, state.speechLang, state.targetMinutes, total);
+
+  if (cached) {
+    state.scripts = cached;
+    setProgress('Scripts charges depuis le cache', `${total} slides — aucun appel API necessaire`, total, total);
+    await new Promise(r => setTimeout(r, 900)); // brief visual feedback
+  } else {
+    for (let i = 0; i < total; i++) {
+      setProgress('Generation des scripts via Claude...', `Slide ${i + 1} / ${total}`, i, total);
+      try {
+        state.scripts[i] = await generateScript(
+          slides[i].text, i, total, apiKey, state.speechLang, state.timePerSlide[i]
+        );
+      } catch (err) {
+        state.scripts[i] = slides[i].text !== '(Slide sans texte visible)'
+          ? slides[i].text
+          : `Script non disponible (${err.message})`;
+      }
+      setProgress('Generation des scripts via Claude...', `${i + 1} / ${total} traitees`, i + 1, total);
     }
-    setProgress('Generation des scripts via Claude...', `${i + 1} / ${total} traitees`, i + 1, total);
+    writeCache(fKey, state.scripts, state.speechLang, state.targetMinutes);
   }
 
   state.currentIndex = 0;
@@ -1076,6 +1133,8 @@ function initPresentation() {
   updatePlayBtn();
   refreshTimerDisplay();
   window.addEventListener('resize', scaleSlideCanvas);
+  // Trigger scale AFTER the browser has laid out the newly visible panel
+  requestAnimationFrame(scaleSlideCanvas);
 }
 
 function buildNavIndicator() {
@@ -1226,6 +1285,36 @@ document.getElementById('next-btn').addEventListener('click', () => {
   const wasPlaying = state.isPlaying;
   stopSpeaking(); renderSlide(state.currentIndex + 1);
   if (wasPlaying) startSpeaking();
+});
+
+document.getElementById('regen-btn').addEventListener('click', async () => {
+  stopSpeaking(); pauseTimer();
+  state.isPlaying = false; updatePlayBtn();
+  const total       = state.slides.length;
+  const savedIndex  = state.currentIndex;
+
+  clearCache(state.currentFileKey);
+
+  showPanel('loading');
+  for (let i = 0; i < total; i++) {
+    setProgress('Regeneration des scripts via Claude...', `Slide ${i + 1} / ${total}`, i, total);
+    try {
+      state.scripts[i] = await generateScript(
+        state.slides[i].text, i, total, state.apiKey, state.speechLang, state.timePerSlide[i]
+      );
+    } catch (err) {
+      state.scripts[i] = state.slides[i].text !== '(Slide sans texte visible)'
+        ? state.slides[i].text
+        : `Script non disponible (${err.message})`;
+    }
+    setProgress('Regeneration des scripts via Claude...', `${i + 1} / ${total} traitees`, i + 1, total);
+  }
+  writeCache(state.currentFileKey, state.scripts, state.speechLang, state.targetMinutes);
+
+  showPanel('presentation');
+  renderSlide(savedIndex);
+  updatePlayBtn(); refreshTimerDisplay();
+  requestAnimationFrame(scaleSlideCanvas);
 });
 
 document.getElementById('reset-btn').addEventListener('click', () => {
